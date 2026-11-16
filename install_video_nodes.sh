@@ -7,9 +7,15 @@ echo "============================================"
 echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMFYUI_DIR="$SCRIPT_DIR"
+# This script lives ONE LEVEL ABOVE the real ComfyUI folder (which holds custom_nodes/).
+if [ -d "$SCRIPT_DIR/ComfyUI/custom_nodes" ] || [ -f "$SCRIPT_DIR/ComfyUI/main.py" ]; then
+    COMFYUI_DIR="$SCRIPT_DIR/ComfyUI"
+else
+    COMFYUI_DIR="$SCRIPT_DIR"   # fallback: script was placed inside the ComfyUI folder
+fi
 CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
 PYTHON_EXE=""
+PY_S_FLAG=""
 
 echo "[1/3]  Locating ComfyUI installation..."
 echo " Root         : $COMFYUI_DIR"
@@ -18,24 +24,33 @@ echo ""
 
 # ── Detect Python ─────────────────────────────────────────────────────────────
 echo "[2/3]  Detecting Python runtime..."
-if [ -f "$COMFYUI_DIR/.venv/bin/python" ]; then
-    PYTHON_EXE="$COMFYUI_DIR/.venv/bin/python"
-    echo " Found: Desktop/venv  (.venv/bin/python)"
-elif [ -f "$COMFYUI_DIR/venv/bin/python" ]; then
-    PYTHON_EXE="$COMFYUI_DIR/venv/bin/python"
-    echo " Found: venv  (venv/bin/python)"
-elif [ -f "$COMFYUI_DIR/python_embeded/python" ]; then
-    PYTHON_EXE="$COMFYUI_DIR/python_embeded/python"
-    echo " Found: Portable  (python_embeded/python)"
-elif command -v python3 &>/dev/null; then
-    PYTHON_EXE="python3"
-    echo " [WARN] Using system python3."
-elif command -v python &>/dev/null; then
-    PYTHON_EXE="python"
-    echo " [WARN] Using system python."
-else
-    echo " [ERROR] No Python found. Is this script in the ComfyUI root folder?"
-    exit 1
+for ROOT in "$SCRIPT_DIR" "$COMFYUI_DIR"; do
+    if [ -f "$ROOT/.venv/bin/python" ]; then
+        PYTHON_EXE="$ROOT/.venv/bin/python"
+        echo " Found: Desktop/venv  ($ROOT/.venv/bin/python)"
+        break
+    elif [ -f "$ROOT/venv/bin/python" ]; then
+        PYTHON_EXE="$ROOT/venv/bin/python"
+        echo " Found: venv  ($ROOT/venv/bin/python)"
+        break
+    elif [ -f "$ROOT/python_embeded/python" ]; then
+        PYTHON_EXE="$ROOT/python_embeded/python"
+        PY_S_FLAG="-s"
+        echo " Found: Portable  ($ROOT/python_embeded/python)"
+        break
+    fi
+done
+if [ -z "$PYTHON_EXE" ]; then
+    if command -v python3 &>/dev/null; then
+        PYTHON_EXE="python3"
+        echo " [WARN] Using system python3."
+    elif command -v python &>/dev/null; then
+        PYTHON_EXE="python"
+        echo " [WARN] Using system python."
+    else
+        echo " [ERROR] No Python found. Is this script next to the ComfyUI folder?"
+        exit 1
+    fi
 fi
 echo ""
 
