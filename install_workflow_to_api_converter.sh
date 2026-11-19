@@ -18,6 +18,17 @@ NODE_DIR="$CUSTOM_NODES_DIR/comfyui-workflow-to-api-converter-endpoint"
 REPO_URL="https://github.com/SethRobinson/comfyui-workflow-to-api-converter-endpoint.git"
 PYTHON_EXE=""
 PY_S_FLAG=""
+NODE_STATUS=""
+DEPS_STATUS="not attempted"
+INSTALLED=0
+UPTODATE=0
+FAILED=0
+
+# Pass -f / --force to reinstall even if the node is already up to date.
+FORCE=0
+case "${1:-}" in
+    -f|--force) FORCE=1 ;;
+esac
 
 echo "[1/5]  Locating ComfyUI installation..."
 echo " Root         : $COMFYUI_DIR"
@@ -69,38 +80,98 @@ echo ""
 echo "[4/5]  Installing custom node..."
 echo ""
 if [ -d "$NODE_DIR/.git" ]; then
-    echo " Repo found - syncing to latest clean state..."
-    git -C "$NODE_DIR" fetch --prune
-    git -C "$NODE_DIR" reset --hard origin/main
-    git -C "$NODE_DIR" clean -fdx
-elif [ -d "$NODE_DIR" ]; then
-    echo " Stale folder found (no .git) - removing and re-cloning..."
-    rm -rf "$NODE_DIR"
-    echo " Cloning into: $NODE_DIR"
-    git clone "$REPO_URL" "$NODE_DIR"
+    echo " Repo found - checking for updates..."
+    if ! git -C "$NODE_DIR" fetch --prune; then
+        echo " [ERROR] git fetch failed - could not check for updates."
+        NODE_STATUS="failed"
+    else
+        REMOTE_REF="@{u}"
+        git -C "$NODE_DIR" rev-parse --verify --quiet "@{u}" >/dev/null 2>&1 || REMOTE_REF="origin/main"
+        LOCAL_SHA="$(git -C "$NODE_DIR" rev-parse HEAD 2>/dev/null || true)"
+        REMOTE_SHA="$(git -C "$NODE_DIR" rev-parse "$REMOTE_REF" 2>/dev/null || true)"
+        if [ "$FORCE" -ne 1 ] && [ -n "$LOCAL_SHA" ] && [ "$LOCAL_SHA" = "$REMOTE_SHA" ]            && git -C "$NODE_DIR" diff --quiet HEAD 2>/dev/null; then
+            echo " Already up to date - skipping."
+            NODE_STATUS="uptodate"
+        else
+            echo " Update available or repair needed - syncing to latest clean state..."
+            NODE_STATUS="updated"
+            git -C "$NODE_DIR" reset --hard "$REMOTE_REF" || NODE_STATUS="update_failed"
+            git -C "$NODE_DIR" clean -fdx || true
+            if [ "$NODE_STATUS" = "update_failed" ]; then
+                echo " [ERROR] git sync failed - node may be outdated."
+            fi
+        fi
+    fi
 else
-    echo " Cloning into: $NODE_DIR"
-    git clone "$REPO_URL" "$NODE_DIR"
+    if [ -d "$NODE_DIR" ]; then
+        echo " Stale folder found (no .git) - removing and re-cloning..."
+        if ! rm -rf "$NODE_DIR"; then
+            echo " [ERROR] Cannot remove $NODE_DIR - close any programs using it."
+            NODE_STATUS="failed"
+        fi
+    fi
+    if [ "$NODE_STATUS" != "failed" ]; then
+        echo " Cloning into: $NODE_DIR"
+        if git clone "$REPO_URL" "$NODE_DIR"; then
+            NODE_STATUS="installed"
+        else
+            echo " [ERROR] git clone failed. Check your internet connection."
+            NODE_STATUS="failed"
+        fi
+    fi
 fi
 echo ""
 
-# ── Install dependencies (optional - not required) ────────────────────────────
-echo "[5/5]  Installing Python dependencies..."
-if [ -f "$NODE_DIR/requirements.txt" ]; then
-    "$PYTHON_EXE" -m pip install -r "$NODE_DIR/requirements.txt" --break-system-packages --no-cache-dir || \
-        echo " [WARN] pip install failed - continuing anyway (requirements.txt is not required)."
-else
-    echo " No requirements.txt found - skipping pip install (not required)."
+# ── Install dependencies (optional - not required) ──────────────────────────────────────────
+if [ "$NODE_STATUS" = "uptodate" ]; then
+    echo "[5/5]  Dependencies skipped - already up to date."
+    DEPS_STATUS="skipped - already up to date"
+elif [ "$NODE_STATUS" != "failed" ]; then
+    echo "[5/5]  Installing Python dependencies..."
+    if [ -f "$NODE_DIR/requirements.txt" ]; then
+        if "$PYTHON_EXE" -m pip install -r "$NODE_DIR/requirements.txt" --break-system-packages --no-cache-dir; then
+            DEPS_STATUS="installed"
+        else
+            echo " [WARN] pip install failed - continuing anyway (requirements.txt is not required)."
+            DEPS_STATUS="FAILED - see messages above"
+        fi
+    else
+        echo " No requirements.txt found - skipping pip install (not required)."
+        DEPS_STATUS="none needed"
+    fi
 fi
 
 # ── Remove all __pycache__ folders and .pyc / .pyo files recursively ──────────
-echo ""
-echo " Purging __pycache__ and .pyc files..."
-find "$NODE_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find "$NODE_DIR" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true
+if [ "$NODE_STATUS" != "failed" ] && [ "$NODE_STATUS" != "uptodate" ]; then
+    echo ""
+    echo " Purging __pycache__ and .pyc files..."
+    find "$NODE_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find "$NODE_DIR" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true
+fi
+
+case "$NODE_STATUS" in
+    installed|updated)    INSTALLED=1 ;;
+    uptodate)             UPTODATE=1 ;;
+    failed|update_failed) FAILED=1 ;;
+esac
 
 echo ""
 echo "======================================================"
-echo " Done! Restart ComfyUI to activate the node."
+echo " Summary"
+echo "======================================================"
+echo " Installed    : $INSTALLED"
+echo " Up to date   : $UPTODATE"
+echo " Dependencies : $DEPS_STATUS"
+echo "======================================================"
+if [ "$FAILED" -gt 0 ]; then
+    echo " Install did not complete - see messages above."
+elif [ "$UPTODATE" -gt 0 ]; then
+    echo " Already up to date - nothing was changed."
+else
+    echo " Done! Restart ComfyUI to activate the node."
+fi
 echo "======================================================"
 echo ""
+if [ "$FAILED" -gt 0 ]; then
+    exit 1
+fi

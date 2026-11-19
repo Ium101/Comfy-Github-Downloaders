@@ -10,6 +10,14 @@ set "COMFYUI_DIR=%~dp0"
 if "%COMFYUI_DIR:~-1%"=="\" set "COMFYUI_DIR=%COMFYUI_DIR:~0,-1%"
 
 set "CUSTOM_NODES_DIR=%COMFYUI_DIR%\custom_nodes"
+set /a INSTALLED=0
+set /a UPTODATE=0
+set /a FAILED=0
+set /a WARNED=0
+set "WARN_LIST="
+set "FORCE="
+if /i "%~1"=="/force" set "FORCE=1"
+if /i "%~1"=="--force" set "FORCE=1"
 set "PYTHON_EXE="
 
 echo [1/3]  Locating ComfyUI installation...
@@ -71,7 +79,19 @@ call :install_node https://github.com/Smirnov75/ComfyUI-mxToolkit
 
 echo.
 echo ============================================
-echo  All done! Please RESTART ComfyUI now.
+echo  Summary
+echo ============================================
+echo  Installed       : !INSTALLED!
+echo  Up to date      : !UPTODATE!
+echo  Dep. warnings   : !WARNED!
+if !WARNED! gtr 0 echo  Check deps for  :!WARN_LIST!
+echo ============================================
+if !FAILED! gtr 0 echo  [WARN] Some nodes failed - see messages above.
+if !INSTALLED! gtr 0 (
+    echo  Please RESTART ComfyUI now.
+) else (
+    echo  Nothing changed - no restart needed.
+)
 echo ============================================
 echo.
 pause
@@ -82,6 +102,8 @@ exit /b 0
 :: %1 = repo URL
 :: ─────────────────────────────────────────────────────────────────────────────
 set "REPO=%~1"
+set "NODE_STATUS="
+set "PIP_WARN="
 :: Extract folder name from URL (last path segment)
 for %%F in (%REPO%) do set "FNAME=%%~nF"
 set "NODE_DIR=%CUSTOM_NODES_DIR%\%FNAME%"
@@ -91,12 +113,34 @@ echo ── %FNAME%
 
 :: Case A: valid git repo → sync to clean latest
 if exist "%NODE_DIR%\.git" (
-    echo   Repo found - syncing to latest clean state...
-    cd /d "%NODE_DIR%"
-    git fetch --prune
-    git reset --hard origin/main
-    git clean -fdx
-    cd /d "%COMFYUI_DIR%"
+    echo   Repo found - checking for updates...
+    git -C "%NODE_DIR%" fetch --prune
+    if errorlevel 1 (
+        echo   [ERROR] git fetch failed - could not check for updates, skipping.
+        set "NODE_STATUS=failed"
+        goto :end_node
+    )
+    set "LOCAL_SHA="
+    set "REMOTE_SHA="
+    set "LOCAL_DIRTY="
+    set "REMOTE_REF=@{u}"
+    git -C "%NODE_DIR%" rev-parse --verify --quiet @{u} >nul 2>&1
+    if errorlevel 1 set "REMOTE_REF=origin/main"
+    for /f %%H in ('git -C "%NODE_DIR%" rev-parse HEAD 2^>nul') do set "LOCAL_SHA=%%H"
+    for /f %%H in ('git -C "%NODE_DIR%" rev-parse !REMOTE_REF! 2^>nul') do set "REMOTE_SHA=%%H"
+    git -C "%NODE_DIR%" diff --quiet HEAD >nul 2>&1
+    if errorlevel 1 set "LOCAL_DIRTY=1"
+    if not defined FORCE if defined LOCAL_SHA if "!LOCAL_SHA!"=="!REMOTE_SHA!" if not defined LOCAL_DIRTY (
+        echo   Already up to date - skipping.
+        set "NODE_STATUS=uptodate"
+        goto :end_node
+    )
+    echo   Update available or repair needed - syncing to latest clean state...
+    set "NODE_STATUS=updated"
+    git -C "%NODE_DIR%" reset --hard !REMOTE_REF!
+    if errorlevel 1 set "NODE_STATUS=update_failed"
+    git -C "%NODE_DIR%" clean -fdx
+    if "!NODE_STATUS!"=="update_failed" echo   [ERROR] git sync failed - node may be outdated.
     goto :do_pip
 )
 
@@ -106,6 +150,7 @@ if exist "%NODE_DIR%" (
     rmdir /s /q "%NODE_DIR%"
     if errorlevel 1 (
         echo   [ERROR] Cannot remove %NODE_DIR% - skipping.
+        set "NODE_STATUS=failed"
         goto :end_node
     )
 )
@@ -115,13 +160,19 @@ echo   Cloning...
 git clone --depth=1 "%REPO%" "%NODE_DIR%"
 if errorlevel 1 (
     echo   [ERROR] git clone failed - skipping.
+    set "NODE_STATUS=failed"
     goto :end_node
 )
+set "NODE_STATUS=installed"
 
 :do_pip
 if exist "%NODE_DIR%\requirements.txt" (
     echo   Installing requirements...
     "%PYTHON_EXE%" -m pip install -r "%NODE_DIR%\requirements.txt" --quiet
+    if errorlevel 1 (
+        echo   [WARN] pip install reported errors.
+        set "PIP_WARN=1"
+    )
 ) else (
     echo   No requirements.txt - skipping pip.
 )
@@ -136,4 +187,13 @@ for /r "%NODE_DIR%" %%f in (*.pyc *.pyo) do (
 )
 
 :end_node
+if "%NODE_STATUS%"=="installed" set /a INSTALLED+=1
+if "%NODE_STATUS%"=="updated" set /a INSTALLED+=1
+if "%NODE_STATUS%"=="uptodate" set /a UPTODATE+=1
+if "%NODE_STATUS%"=="failed" set /a FAILED+=1
+if "%NODE_STATUS%"=="update_failed" set /a FAILED+=1
+if defined PIP_WARN (
+    set /a WARNED+=1
+    set "WARN_LIST=!WARN_LIST! !FNAME!"
+)
 exit /b 0
