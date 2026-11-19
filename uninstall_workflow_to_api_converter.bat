@@ -81,8 +81,8 @@ set "NODE_DIR=%CUSTOM_NODES_DIR%\%FNAME%"
 echo.
 echo -- %FNAME%
 
-:: Not installed (neither the normal nor the ComfyUI-Manager ".disabled" folder)
-if not exist "%NODE_DIR%" if not exist "%NODE_DIR%.disabled" (
+:: Not installed (neither the normal one nor a ComfyUI-Manager disabled copy)
+if not exist "%NODE_DIR%" if not exist "%NODE_DIR%.disabled" if not exist "%CUSTOM_NODES_DIR%\.disabled\%FNAME%" (
     echo   Not installed - skipping.
     set /a SKIPPED+=1
     goto :end_remove
@@ -90,6 +90,7 @@ if not exist "%NODE_DIR%" if not exist "%NODE_DIR%.disabled" (
 
 call :delete_dir "%NODE_DIR%"
 call :delete_dir "%NODE_DIR%.disabled"
+call :delete_dir "%CUSTOM_NODES_DIR%\.disabled\%FNAME%"
 
 :end_remove
 exit /b 0

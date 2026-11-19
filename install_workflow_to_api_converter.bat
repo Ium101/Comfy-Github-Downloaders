@@ -17,6 +17,7 @@ set "NODE_STATUS="
 set "DEPS_STATUS=not attempted"
 set /a INSTALLED=0
 set /a UPTODATE=0
+set /a ENABLED=0
 set /a FAILED=0
 set "FORCE="
 if /i "%~1"=="/force" set "FORCE=1"
@@ -63,6 +64,36 @@ echo.
 :: ── Clone / update / repair ───────────────────────────────────────────────────
 echo [4/5]  Installing custom node...
 echo.
+
+:: Re-enable: a copy parked in custom_nodes\.disabled\ (or named <name>.disabled)
+:: is moved back to custom_nodes instead of being left behind as a duplicate.
+for %%F in ("%NODE_DIR%") do set "NODE_NAME=%%~nxF"
+set "RESTORE_ERR="
+for %%D in ("%CUSTOM_NODES_DIR%\.disabled\%NODE_NAME%" "%NODE_DIR%.disabled") do (
+    if exist "%%~D" (
+        if exist "!NODE_DIR!" (
+            echo  Disabled duplicate found - active copy exists, removing the duplicate...
+            rmdir /s /q "%%~D"
+            if exist "%%~D" (
+                echo  [ERROR] Could not remove the disabled duplicate.
+                set "RESTORE_ERR=1"
+            )
+        ) else (
+            echo  Found disabled copy - moving it back to custom_nodes...
+            move "%%~D" "!NODE_DIR!" >nul
+            if errorlevel 1 (
+                echo  [ERROR] Could not move the disabled copy back.
+                set "RESTORE_ERR=1"
+            ) else (
+                set /a ENABLED+=1
+            )
+        )
+    )
+)
+if defined RESTORE_ERR (
+    set "NODE_STATUS=failed"
+    goto :done
+)
 
 if exist "%NODE_DIR%\.git" (
     echo  Repo found - checking for updates...
@@ -157,10 +188,13 @@ echo  Summary
 echo ======================================================
 echo  Installed    : !INSTALLED!
 echo  Up to date   : !UPTODATE!
+if !ENABLED! gtr 0 echo  Re-enabled   : !ENABLED!
 echo  Dependencies : !DEPS_STATUS!
 echo ======================================================
 if !FAILED! gtr 0 (
     echo  Install did not complete - see messages above.
+) else if !ENABLED! gtr 0 (
+    echo  Node re-enabled - restart ComfyUI to activate it.
 ) else if !UPTODATE! gtr 0 (
     echo  Already up to date - nothing was changed.
 ) else (

@@ -13,6 +13,7 @@ if "%COMFYUI_DIR:~-1%"=="\" set "COMFYUI_DIR=%COMFYUI_DIR:~0,-1%"
 set "CUSTOM_NODES_DIR=%COMFYUI_DIR%\custom_nodes"
 set /a INSTALLED=0
 set /a UPTODATE=0
+set /a ENABLED=0
 set /a FAILED=0
 set /a WARNED=0
 set "WARN_LIST="
@@ -100,11 +101,13 @@ echo  Summary
 echo ============================================
 echo  Installed       : !INSTALLED!
 echo  Up to date      : !UPTODATE!
+if !ENABLED! gtr 0 echo  Re-enabled      : !ENABLED!
 echo  Dep. warnings   : !WARNED!
 if !WARNED! gtr 0 echo  Check deps for  :!WARN_LIST!
 echo ============================================
 if !FAILED! gtr 0 echo  [WARN] Some nodes failed - see messages above.
-if !INSTALLED! gtr 0 (
+set /a CHANGED=INSTALLED+ENABLED
+if !CHANGED! gtr 0 (
     echo  Please RESTART ComfyUI now.
 ) else (
     echo  Nothing changed - no restart needed.
@@ -132,6 +135,35 @@ set "NODE_DIR=%CUSTOM_NODES_DIR%\%FNAME%"
 
 echo.
 echo ── %FNAME%
+
+:: Re-enable: a copy parked in custom_nodes\.disabled\ (or named <name>.disabled)
+:: is moved back to custom_nodes instead of being left behind as a duplicate.
+set "RESTORE_ERR="
+for %%D in ("%CUSTOM_NODES_DIR%\.disabled\%FNAME%" "%NODE_DIR%.disabled") do (
+    if exist "%%~D" (
+        if exist "!NODE_DIR!" (
+            echo   Disabled duplicate found - active copy exists, removing the duplicate...
+            rmdir /s /q "%%~D"
+            if exist "%%~D" (
+                echo   [ERROR] Could not remove the disabled duplicate.
+                set "RESTORE_ERR=1"
+            )
+        ) else (
+            echo   Found disabled copy - moving it back to custom_nodes...
+            move "%%~D" "!NODE_DIR!" >nul
+            if errorlevel 1 (
+                echo   [ERROR] Could not move the disabled copy back.
+                set "RESTORE_ERR=1"
+            ) else (
+                set /a ENABLED+=1
+            )
+        )
+    )
+)
+if defined RESTORE_ERR (
+    set "NODE_STATUS=failed"
+    goto :end_node
+)
 
 :: Case A: valid git repo → sync to clean latest
 if exist "%NODE_DIR%\.git" (

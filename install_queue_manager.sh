@@ -22,6 +22,7 @@ NODE_STATUS=""
 DEPS_STATUS="not attempted"
 INSTALLED=0
 UPTODATE=0
+ENABLED=0
 FAILED=0
 
 # Pass -f / --force to reinstall even if the node is already up to date.
@@ -79,7 +80,44 @@ echo ""
 # ── Clone / update / repair ───────────────────────────────────────────────────
 echo "[4/5]  Installing custom node..."
 echo ""
-if [ -d "$NODE_DIR/.git" ]; then
+# ── Re-enable a disabled copy instead of keeping a duplicate ──────────────────
+# Looks for custom_nodes/.disabled/<name> and custom_nodes/<name>.disabled
+# (ComfyUI-Manager's two ways of disabling a node). A disabled copy is moved back
+# to custom_nodes; if an active copy already exists, the disabled duplicate is removed.
+restore_disabled() {
+    local FNAME="$1"
+    local NODE_DIR="$CUSTOM_NODES_DIR/$FNAME"
+    local DIS
+    local RC=0
+    for DIS in "$CUSTOM_NODES_DIR/.disabled/$FNAME" "$NODE_DIR.disabled"; do
+        if [ -e "$DIS" ] || [ -L "$DIS" ]; then
+            if [ -e "$NODE_DIR" ] || [ -L "$NODE_DIR" ]; then
+                echo "  Disabled duplicate found ($DIS) - active copy exists, removing the duplicate..."
+                if ! rm -rf "$DIS"; then
+                    echo "  [ERROR] Could not remove the disabled duplicate."
+                    RC=1
+                fi
+            else
+                echo "  Found disabled copy ($DIS) - moving it back to custom_nodes..."
+                if mv "$DIS" "$NODE_DIR"; then
+                    ENABLED=$((ENABLED + 1))
+                else
+                    echo "  [ERROR] Could not move the disabled copy back."
+                    RC=1
+                fi
+            fi
+        fi
+    done
+    return $RC
+}
+
+
+if ! restore_disabled "$(basename "$NODE_DIR")"; then
+    NODE_STATUS="failed"
+fi
+if [ "$NODE_STATUS" = "failed" ]; then
+    :   # could not re-enable the disabled copy - skip
+elif [ -d "$NODE_DIR/.git" ]; then
     echo " Repo found - checking for updates..."
     if ! git -C "$NODE_DIR" fetch --prune; then
         echo " [ERROR] git fetch failed - could not check for updates."
@@ -162,10 +200,15 @@ echo " Summary"
 echo "============================================"
 echo " Installed    : $INSTALLED"
 echo " Up to date   : $UPTODATE"
+if [ "$ENABLED" -gt 0 ]; then
+    echo " Re-enabled   : $ENABLED"
+fi
 echo " Dependencies : $DEPS_STATUS"
 echo "============================================"
 if [ "$FAILED" -gt 0 ]; then
     echo " Install did not complete - see messages above."
+elif [ "$ENABLED" -gt 0 ]; then
+    echo " Node re-enabled - restart ComfyUI to activate it."
 elif [ "$UPTODATE" -gt 0 ]; then
     echo " Already up to date - nothing was changed."
 else

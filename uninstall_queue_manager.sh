@@ -65,7 +65,7 @@ remove_node() {
     echo "── $FNAME"
 
     # Not installed (neither the normal nor the ComfyUI-Manager ".disabled" folder)
-    if ! present "$NODE_DIR" && ! present "$NODE_DIR.disabled"; then
+    if ! present "$NODE_DIR" && ! present "$NODE_DIR.disabled" && ! present "$CUSTOM_NODES_DIR/.disabled/$FNAME"; then
         echo "  Not installed - skipping."
         SKIPPED=$((SKIPPED + 1))
         return 0
@@ -73,6 +73,7 @@ remove_node() {
 
     delete_dir "$NODE_DIR"
     delete_dir "$NODE_DIR.disabled"
+    delete_dir "$CUSTOM_NODES_DIR/.disabled/$FNAME"
 }
 
 echo "[1/3]  Locating ComfyUI installation..."
