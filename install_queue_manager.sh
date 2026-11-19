@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Launch helper ─────────────────────────────────────────────────────────────
+# A file-manager double-click can run a script with no terminal and no usable
+# output, so it either dies silently or you can't see what happened. Here:
+#   1) no terminal  -> re-open this script inside a terminal window
+#                      (the window stays open at the end so you can read it)
+#   2) none found   -> write all output to a .log file next to the script
+shopt -s execfail
+if [ ! -t 0 ] && [ ! -t 1 ] && [ -z "${AC_IN_TERMINAL:-}" ]; then
+    _SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        export AC_IN_TERMINAL=1
+        for _T in konsole gnome-terminal xfce4-terminal mate-terminal lxterminal xterm x-terminal-emulator; do
+            command -v "$_T" >/dev/null 2>&1 || continue
+            case "$_T" in
+                gnome-terminal)               exec "$_T" -- bash "$_SELF" "$@" ;;
+                xfce4-terminal|mate-terminal) exec "$_T" -x bash "$_SELF" "$@" ;;
+                *)                            exec "$_T" -e bash "$_SELF" "$@" ;;
+            esac
+        done
+        unset AC_IN_TERMINAL
+    fi
+    exec >>"${_SELF%.sh}.log" 2>&1
+fi
+if [ -n "${AC_IN_TERMINAL:-}" ]; then
+    trap 'echo ""; read -r -s -n 1 -p " Press any key to close this window..." _ || true; echo ""' EXIT
+fi
+
 echo "============================================"
 echo " AC ComfyUI Queue Manager | Installer"
 echo "============================================"
@@ -14,7 +41,7 @@ else
     COMFYUI_DIR="$SCRIPT_DIR"   # fallback: script was placed inside the ComfyUI folder
 fi
 CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
-NODE_DIR="$CUSTOM_NODES_DIR/ac-comfyui-queue-manager"
+NODE_DIR="$CUSTOM_NODES_DIR/comfyui_queue_manager"   # folder name ComfyUI uses (repo name differs)
 REPO_URL="https://github.com/abdullahceylan/ac-comfyui-queue-manager.git"
 PYTHON_EXE=""
 PY_S_FLAG=""
@@ -134,7 +161,7 @@ elif [ -d "$NODE_DIR/.git" ]; then
             echo " Update available or repair needed - syncing to latest clean state..."
             NODE_STATUS="updated"
             git -C "$NODE_DIR" reset --hard "$REMOTE_REF" || NODE_STATUS="update_failed"
-            git -C "$NODE_DIR" clean -fdx || true
+            git -C "$NODE_DIR" clean -fd || true   # no -x: keep ignored user data (queue_manager.db, logs/, queue_data/)
             if [ "$NODE_STATUS" = "update_failed" ]; then
                 echo " [ERROR] git sync failed - node may be outdated."
             fi
@@ -159,6 +186,38 @@ else
     fi
 fi
 echo ""
+
+# ── Verify the node folder (version, source, no missing files) ────────────────
+verify_node() {
+    [ -d "$NODE_DIR/.git" ] || return 0
+    local ORIGIN REF HEADSHA REMOTESHA TOTAL MISSING A B
+    ORIGIN="$(git -C "$NODE_DIR" remote get-url origin 2>/dev/null || echo unknown)"
+    REF="@{u}"
+    git -C "$NODE_DIR" rev-parse --verify --quiet "@{u}" >/dev/null 2>&1 || REF="origin/main"
+    HEADSHA="$(git -C "$NODE_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")"
+    REMOTESHA="$(git -C "$NODE_DIR" rev-parse --short "$REF" 2>/dev/null || echo "?")"
+    TOTAL="$(git -C "$NODE_DIR" ls-files | wc -l | tr -d ' ')"
+    MISSING="$(git -C "$NODE_DIR" ls-files --deleted | wc -l | tr -d ' ')"
+    echo " Verify: source = $ORIGIN"
+    echo " Verify: commit = $HEADSHA  (latest on remote: $REMOTESHA)"
+    echo " Verify: files  = $TOTAL tracked, $MISSING missing"
+    A="${ORIGIN%.git}"; A="${A%/}"; B="${REPO_URL%.git}"; B="${B%/}"
+    if [ "$A" != "$B" ]; then
+        echo " [WARN] This folder tracks a different repository than this script expects:"
+        echo "        folder : $ORIGIN"
+        echo "        script : $REPO_URL"
+    fi
+    if [ "$MISSING" -gt 0 ]; then
+        echo " [WARN] Some tracked files are missing - run this installer with --force."
+    fi
+    if [ "$HEADSHA" != "$REMOTESHA" ]; then
+        echo " [WARN] Not on the latest remote commit - run this installer with --force."
+    fi
+}
+if [ "$NODE_STATUS" != "failed" ]; then
+    verify_node
+    echo ""
+fi
 
 # ── Install dependencies ──────────────────────────────────────────
 if [ "$NODE_STATUS" = "uptodate" ]; then

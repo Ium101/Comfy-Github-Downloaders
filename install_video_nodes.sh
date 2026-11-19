@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Launch helper ─────────────────────────────────────────────────────────────
+# A file-manager double-click can run a script with no terminal and no usable
+# output, so it either dies silently or you can't see what happened. Here:
+#   1) no terminal  -> re-open this script inside a terminal window
+#                      (the window stays open at the end so you can read it)
+#   2) none found   -> write all output to a .log file next to the script
+shopt -s execfail
+if [ ! -t 0 ] && [ ! -t 1 ] && [ -z "${AC_IN_TERMINAL:-}" ]; then
+    _SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        export AC_IN_TERMINAL=1
+        for _T in konsole gnome-terminal xfce4-terminal mate-terminal lxterminal xterm x-terminal-emulator; do
+            command -v "$_T" >/dev/null 2>&1 || continue
+            case "$_T" in
+                gnome-terminal)               exec "$_T" -- bash "$_SELF" "$@" ;;
+                xfce4-terminal|mate-terminal) exec "$_T" -x bash "$_SELF" "$@" ;;
+                *)                            exec "$_T" -e bash "$_SELF" "$@" ;;
+            esac
+        done
+        unset AC_IN_TERMINAL
+    fi
+    exec >>"${_SELF%.sh}.log" 2>&1
+fi
+if [ -n "${AC_IN_TERMINAL:-}" ]; then
+    trap 'echo ""; read -r -s -n 1 -p " Press any key to close this window..." _ || true; echo ""' EXIT
+fi
+
 echo "============================================"
 echo " SmoothMix Wan 2.2 - Custom Nodes Installer"
 echo "============================================"

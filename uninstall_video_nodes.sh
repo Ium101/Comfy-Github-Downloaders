@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Launch helper ─────────────────────────────────────────────────────────────
+# A file-manager double-click can run a script with no terminal and no usable
+# output, so it either dies silently or you can't see what happened. Here:
+#   1) no terminal  -> re-open this script inside a terminal window
+#                      (the window stays open at the end so you can read it)
+#   2) none found   -> write all output to a .log file next to the script
+shopt -s execfail
+if [ ! -t 0 ] && [ ! -t 1 ] && [ -z "${AC_IN_TERMINAL:-}" ]; then
+    _SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        export AC_IN_TERMINAL=1
+        for _T in konsole gnome-terminal xfce4-terminal mate-terminal lxterminal xterm x-terminal-emulator; do
+            command -v "$_T" >/dev/null 2>&1 || continue
+            case "$_T" in
+                gnome-terminal)               exec "$_T" -- bash "$_SELF" "$@" ;;
+                xfce4-terminal|mate-terminal) exec "$_T" -x bash "$_SELF" "$@" ;;
+                *)                            exec "$_T" -e bash "$_SELF" "$@" ;;
+            esac
+        done
+        unset AC_IN_TERMINAL
+    fi
+    exec >>"${_SELF%.sh}.log" 2>&1
+fi
+if [ -n "${AC_IN_TERMINAL:-}" ]; then
+    trap 'echo ""; read -r -s -n 1 -p " Press any key to close this window..." _ || true; echo ""' EXIT
+fi
+
 echo "============================================"
 echo " SmoothMix Wan 2.2 - Custom Nodes Uninstaller"
 echo "============================================"
@@ -14,12 +41,6 @@ else
     COMFYUI_DIR="$SCRIPT_DIR"   # fallback: script was placed inside the ComfyUI folder
 fi
 CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
-
-# Pass -y / --yes to skip the confirmation prompt.
-AUTO_YES=0
-case "${1:-}" in
-    -y|--yes) AUTO_YES=1 ;;
-esac
 
 REMOVED=0
 SKIPPED=0
@@ -97,7 +118,7 @@ if [ ! -d "$CUSTOM_NODES_DIR" ]; then
     exit 1
 fi
 
-# ── Confirmation ──────────────────────────────────────────────────────────────
+# ── Summary of what will be removed ──────────────────────────────────────────────────────────────
 echo "[2/3]  These custom node folders will be DELETED (if present):"
 for REPO in "${NODES[@]}"; do
     echo "   - $(basename "$REPO" .git)"
@@ -107,20 +128,6 @@ echo " NOTE: other workflows may depend on some of these nodes."
 echo "       Python packages installed in the environment are NOT removed."
 echo "       Close ComfyUI before continuing."
 echo ""
-if [ "$AUTO_YES" -ne 1 ]; then
-    CONFIRM=""
-    read -r -p " Type Y to continue (anything else cancels): " CONFIRM || CONFIRM=""
-    case "$CONFIRM" in
-        y|Y) ;;
-        *)
-            echo ""
-            echo " Cancelled - nothing was removed."
-            exit 0
-            ;;
-    esac
-fi
-echo ""
-
 # ── Remove each node ──────────────────────────────────────────────────────────
 echo "[3/3]  Removing custom nodes..."
 for REPO in "${NODES[@]}"; do
