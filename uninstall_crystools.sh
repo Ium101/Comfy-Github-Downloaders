@@ -1,79 +1,136 @@
 #!/usr/bin/env bash
-# ============================================================
-#  Removes ComfyUI-Crystools from custom_nodes (including any
-#  disabled copy). Place this file in the folder that contains
-#  "custom_nodes", or one level above it.
-#  Python packages are NOT removed, since other nodes may use them.
-# ============================================================
-set -u
+set -euo pipefail
 
-NODE_NAME="ComfyUI-Crystools"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-REMOVED=0
-HAD_ERROR=0
-
-echo "============================================================"
-echo "  ComfyUI-Crystools Uninstaller"
-echo "============================================================"
-echo
-
-# ---------- Locate custom_nodes ----------
-NODES_DIR=""
-for c in "$SCRIPT_DIR/custom_nodes" "$SCRIPT_DIR/ComfyUI/custom_nodes"; do
-    if [ -d "$c" ]; then
-        NODES_DIR="$c"
-        break
+# ── Launch helper ─────────────────────────────────────────────────────────────
+# A file-manager double-click can run a script with no terminal and no usable
+# output, so it either dies silently or you can't see what happened. Here:
+#   1) no terminal  -> re-open this script inside a terminal window
+#                      (the window stays open at the end so you can read it)
+#   2) none found   -> write all output to a .log file next to the script
+shopt -s execfail
+if [ ! -t 0 ] && [ ! -t 1 ] && [ -z "${AC_IN_TERMINAL:-}" ]; then
+    _SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        export AC_IN_TERMINAL=1
+        for _T in konsole gnome-terminal xfce4-terminal mate-terminal lxterminal xterm x-terminal-emulator; do
+            command -v "$_T" >/dev/null 2>&1 || continue
+            case "$_T" in
+                gnome-terminal)               exec "$_T" -- bash "$_SELF" "$@" ;;
+                xfce4-terminal|mate-terminal) exec "$_T" -x bash "$_SELF" "$@" ;;
+                *)                            exec "$_T" -e bash "$_SELF" "$@" ;;
+            esac
+        done
+        unset AC_IN_TERMINAL
     fi
-done
-if [ -z "$NODES_DIR" ]; then
-    echo "[ERROR] custom_nodes folder not found next to this script."
-    echo "        Put this .sh in the folder that contains custom_nodes"
-    echo "        (or one level above it)."
-    echo
-    exit 1
+    exec >>"${_SELF%.sh}.log" 2>&1
+fi
+if [ -n "${AC_IN_TERMINAL:-}" ]; then
+    trap 'echo ""; read -r -s -n 1 -p " Press any key to close this window..." _ || true; echo ""' EXIT
 fi
 
-NODE_DIR="$NODES_DIR/$NODE_NAME"
-DISABLED_A="$NODES_DIR/.disabled/$NODE_NAME"
-DISABLED_B="$NODES_DIR/$NODE_NAME.disabled"
+echo "======================================================"
+echo " ComfyUI-Crystools | Uninstaller"
+echo "======================================================"
+echo ""
 
-echo "[INFO] Make sure ComfyUI is closed before continuing."
-echo
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script lives ONE LEVEL ABOVE the real ComfyUI folder (which holds custom_nodes/).
+if [ -d "$SCRIPT_DIR/ComfyUI/custom_nodes" ] || [ -f "$SCRIPT_DIR/ComfyUI/main.py" ]; then
+    COMFYUI_DIR="$SCRIPT_DIR/ComfyUI"
+else
+    COMFYUI_DIR="$SCRIPT_DIR"   # fallback: script was placed inside the ComfyUI folder
+fi
+CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
 
-remove_path() {
-    local p="$1"
-    if [ ! -e "$p" ] && [ ! -L "$p" ]; then
-        return
-    fi
-    echo "[INFO] Removing $p ..."
-    rm -rf -- "$p"
-    if [ -e "$p" ] || [ -L "$p" ]; then
-        echo "[ERROR] Could not remove it. Check permissions and try again."
-        HAD_ERROR=1
+REMOVED=0
+SKIPPED=0
+FAILED=0
+
+# ── Nodes to remove (same repos as the installer) ─────────────────────────────
+NODES=(
+    https://github.com/crystian/ComfyUI-Crystools.git
+)
+
+# true if the path exists (also true for a broken symlink)
+present() { [ -e "$1" ] || [ -L "$1" ]; }
+
+# ── Delete one folder and count the result ────────────────────────────────────
+delete_dir() {
+    local TARGET="$1"
+    present "$TARGET" || return 0
+    echo "  Removing $TARGET ..."
+    rm -rf "$TARGET" 2>/dev/null || true
+    if present "$TARGET"; then
+        echo "  [ERROR] Could not remove it - check permissions / close ComfyUI, then retry."
+        FAILED=$((FAILED + 1))
     else
-        echo "[OK] Removed."
+        echo "  Removed."
         REMOVED=$((REMOVED + 1))
     fi
 }
 
-remove_path "$NODE_DIR"
-remove_path "$DISABLED_A"
-remove_path "$DISABLED_B"
+# ── Per-node remove function ──────────────────────────────────────────────────
+remove_node() {
+    local REPO="$1"
+    local FNAME
+    FNAME="$(basename "$REPO" .git)"
+    # Safety: never operate on custom_nodes itself
+    if [ -z "$FNAME" ]; then
+        echo "  [ERROR] Could not work out the folder name for $REPO - skipping."
+        FAILED=$((FAILED + 1))
+        return 0
+    fi
+    local NODE_DIR="$CUSTOM_NODES_DIR/$FNAME"
 
-NOT_FOUND=0
-if [ "$REMOVED" -eq 0 ] && [ "$HAD_ERROR" -eq 0 ]; then
-    NOT_FOUND=1
-    echo "[OK] $NODE_NAME is not installed, nothing to remove."
+    echo ""
+    echo "── $FNAME"
+
+    # Not installed (neither the normal nor the ComfyUI-Manager ".disabled" folder)
+    if ! present "$NODE_DIR" && ! present "$NODE_DIR.disabled" && ! present "$CUSTOM_NODES_DIR/.disabled/$FNAME"; then
+        echo "  Not installed - skipping."
+        SKIPPED=$((SKIPPED + 1))
+        return 0
+    fi
+
+    delete_dir "$NODE_DIR"
+    delete_dir "$NODE_DIR.disabled"
+    delete_dir "$CUSTOM_NODES_DIR/.disabled/$FNAME"
+}
+
+echo "[1/3]  Locating ComfyUI installation..."
+echo " Root         : $COMFYUI_DIR"
+echo " custom_nodes : $CUSTOM_NODES_DIR"
+echo ""
+if [ ! -d "$CUSTOM_NODES_DIR" ]; then
+    echo " [ERROR] custom_nodes folder not found. Is this script next to the ComfyUI folder?"
+    exit 1
 fi
 
-echo
-echo "============================================================"
-echo "  Summary"
-echo "============================================================"
-echo "  Removed:       $REMOVED"
-echo "  Not installed: $NOT_FOUND"
-echo "============================================================"
-echo
+# ── Summary of what will be removed ──────────────────────────────────────────
+echo "[2/3]  These custom node folders will be DELETED (if present):"
+for REPO in "${NODES[@]}"; do
+    echo "   - $(basename "$REPO" .git)"
+done
+echo ""
+echo " NOTE: other workflows may depend on some of these nodes."
+echo "       Python packages installed in the environment are NOT removed."
+echo "       Close ComfyUI before continuing."
+echo ""
+# ── Remove each node ──────────────────────────────────────────────────────────
+echo "[3/3]  Removing custom nodes..."
+for REPO in "${NODES[@]}"; do
+    remove_node "$REPO"
+done
 
-exit "$HAD_ERROR"
+echo ""
+echo "======================================================"
+echo " Done!  Removed: $REMOVED  |  Not installed: $SKIPPED"
+if [ "$FAILED" -gt 0 ]; then
+    echo " [WARN] Some folders could not be removed - see messages above."
+fi
+echo " Please RESTART ComfyUI now."
+echo "======================================================"
+echo ""
+if [ "$FAILED" -gt 0 ]; then
+    exit 1
+fi
